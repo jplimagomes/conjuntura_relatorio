@@ -1,0 +1,134 @@
+---
+title: "Relatório de inflação - IPCA"
+author: "João Paulo Lima Gomes"
+lang: pt
+format: 
+  html:
+    page-layout: full
+execute:
+    echo: false
+    warning: false
+---
+
+```{python}
+# Bibliotecas
+import pandas as pd
+import plotnine as p9
+
+# Coleta de dados
+# Sidra/IBGE
+# Escolha as variáveis e, a seguir, clique no botão "Links de Compartilhar" e selecione "Parâmetros para a API"
+dados_sidra = pd.read_json(
+"https://apisidra.ibge.gov.br/values/t/7060/n1/all/v/63,2265/p/all/c315/7169,7170,7445,7486,7558,7625,7660,7712,7766,7786/d/v63%202,v2265%202?formato=json"
+)
+
+# BCB
+# No SGS/BCB, procure pelo código da série (aqui, '13521' é o da meta de inflação)
+# No Google, após procurar 'api sgs bcb', colete a URL e então modifique o parâmetro no link
+dados_bcb = pd.read_json(
+"https://api.bcb.gov.br/dados/serie/bcdata.sgs.13521/dados?formato=json"
+)
+
+# Tratamento dos dados
+dados_ipca = (
+    dados_sidra
+    .rename(
+        columns = {
+            "V": "valor",
+            "D2N": "variacao",
+            "D3C": "data",
+            "D4N": "grupo"
+        }
+    )
+    .query("valor not in ['Valor', '...']")
+    .assign(
+        data = lambda x: pd.to_datetime(x.data, format= "%Y%m"),
+        variacao = lambda x: x.variacao.case_when([
+            (x.variacao == "IPCA - Variação mensal", "Var. % mensal"),
+            (x.variacao == "IPCA - Variação acumulada em 12 meses", "Var. % acum. 12m")
+        ]),
+        grupo = lambda x: x.grupo.str.replace(pat = "^\\d{1}\\.", repl = "", regex = True),
+        valor = lambda x: x.valor.astype(float)
+    )
+    .filter(["data", "variacao", "grupo", "valor"])
+)
+
+dados_meta = dados_bcb.assign(
+    data = lambda x: pd.to_datetime(x.data, format = "%d/%m/%Y")
+    ).rename(columns = {"valor": "Meta % anual"}).set_index("data")
+
+# Vamos criar duas tabelas
+tabela_g1 = (
+    dados_ipca
+    .query("grupo == 'Índice geral'") # Selecionando apenas o IPCA cheio
+    .drop(labels = "grupo", axis = "columns") # Retirando a coluna de grupos
+    .pivot(index = "data", columns = "variacao", values = "valor") # Desimpilhando para cruzar com os dados_meta
+    .join(other = dados_meta, how = "left")
+    .assign(**{"Meta % anual": lambda x: x["Meta % anual"].ffill()})
+    .reset_index()
+    .melt(id_vars = "data", var_name = "variavel", value_name = "valor") # Empilhando novamente
+)
+
+# Tabela com a variação no último mês dos grupos do IPCA
+tabela_g2 = (
+    dados_ipca
+    .query("grupo != 'Índice geral' and variacao == 'Var. % mensal' and data == data.max()")
+)
+
+variacao = tabela_g1.query("data == data.max() and variavel == 'Var. % mensal'").valor.iloc[0]
+periodo = tabela_g1.query("data == data.max() and variavel == 'Var. % mensal'").data.iloc[0].strftime("%B/%Y")
+```
+
+::::: grid
+::: g-col-7
+## Headline
+
+Texto de análise de conjuntura.
+
+-   Destaque 1
+-   Destaque 2
+-   O IPCA variou `{python} variacao`% em `{python} periodo`.
+:::
+
+::: g-col-5
+```{python}
+(
+    p9.ggplot(tabela_g1) +
+    p9.aes(x = "data", y = "valor", color = "variavel") +
+    p9.geom_line() +
+    p9.scale_x_date(date_labels = "%Y") +
+    p9.labs(
+        title = "Inflação headline: IPCA",
+        x = "",
+        y = "",
+        color = "",
+        caption = "Dados: BCB e IBGE | Elaboração: João Paulo Lima Gomes"
+    ) +
+    p9.theme(legend_position = "top", figure_size = (4, 3))
+)
+```
+
+:::{.callout-note}
+# Conceito
+IPCA é a sigla de Índice Nacional de Preços ao Consumidor Amplo, um índice de preços produzido pelo IBGE. Trata-se de uma medida acumulada do comportamento dos preços de bens e serviços da economia brasileira. A inflação é a taxa de crescimento desse índice.
+:::
+
+```{python}
+(
+    p9.ggplot(tabela_g2) +
+    p9.aes(x = "reorder(grupo, valor)", y = "valor") +
+    p9.geom_col() +
+    p9.coord_flip() +
+    p9.labs(
+       title = "Grupos do IPCA",
+       subtitle = "Var. % mensal em " + periodo,
+       x = "",
+       y = "",
+       caption = "Dados: BCB e IBGE | Elaboração: João Paulo Lima Gomes"       
+    ) +
+    p9.theme(figure_size = (4.5, 3))
+)
+```
+
+:::
+:::::
